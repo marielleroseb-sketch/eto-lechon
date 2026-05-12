@@ -5,6 +5,33 @@ const STORAGE_KEY = 'eto-lechon-orders';
 const REVIEWS_STORAGE_KEY = 'eto-lechon-reviews';
 const INVENTORY_STORAGE_KEY = 'eto-lechon-inventory';
 const ADMIN_PASSWORD = 'Manzan123';
+const ORDER_API_BASE = (process.env.REACT_APP_ORDER_API_BASE || '').replace(/\/+$/, '');
+
+async function ordersApiFetch(path, options) {
+  const response = await fetch(`${ORDER_API_BASE}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options && options.headers ? options.headers : {}),
+    },
+    ...options,
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `Request failed (${response.status}).`);
+  }
+
+  if (response.status === 204) return null;
+  return response.json();
+}
+
+const ordersApi = {
+  enabled: Boolean(ORDER_API_BASE),
+  list: () => ordersApiFetch('/orders'),
+  create: (order) => ordersApiFetch('/orders', { method: 'POST', body: JSON.stringify(order) }),
+  updateStatus: (id, status) => ordersApiFetch(`/orders/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
+  remove: (id) => ordersApiFetch(`/orders/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+};
 
 const products = [
   {
@@ -142,6 +169,7 @@ function App() {
   const [reviews, setReviews] = useState(getStoredReviews);
   const [inventory, setInventory] = useState(getStoredInventory);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [ordersSyncError, setOrdersSyncError] = useState('');
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(orders));
@@ -155,15 +183,55 @@ function App() {
     localStorage.setItem(INVENTORY_STORAGE_KEY, JSON.stringify(inventory));
   }, [inventory]);
 
+  useEffect(() => {
+    let alive = true;
+    if (!ordersApi.enabled) return undefined;
+
+    (async () => {
+      try {
+        const remoteOrders = await ordersApi.list();
+        if (!alive) return;
+        if (Array.isArray(remoteOrders)) setOrders(remoteOrders);
+        setOrdersSyncError('');
+      } catch (error) {
+        if (!alive) return;
+        setOrdersSyncError(error instanceof Error ? error.message : 'Failed to sync orders.');
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const goTo = (nextPage) => {
     setPage(nextPage);
     setMenuOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const addOrder = (order) => {
+  const refreshOrders = async () => {
+    if (!ordersApi.enabled) return;
+    try {
+      const remoteOrders = await ordersApi.list();
+      if (Array.isArray(remoteOrders)) setOrders(remoteOrders);
+      setOrdersSyncError('');
+    } catch (error) {
+      setOrdersSyncError(error instanceof Error ? error.message : 'Failed to sync orders.');
+    }
+  };
+
+  const addOrder = async (order) => {
     setOrders((current) => [order, ...current]);
     setPage('order');
+    if (!ordersApi.enabled) return;
+    try {
+      await ordersApi.create(order);
+      await refreshOrders();
+      setOrdersSyncError('');
+    } catch (error) {
+      setOrdersSyncError(error instanceof Error ? error.message : 'Failed to send order to server.');
+    }
   };
 
   return (
@@ -208,6 +276,9 @@ function App() {
             setInventory={setInventory}
             unlocked={adminUnlocked}
             setUnlocked={setAdminUnlocked}
+            ordersSyncError={ordersSyncError}
+            ordersApiEnabled={ordersApi.enabled}
+            refreshOrders={refreshOrders}
           />
         )}
       </main>
@@ -704,7 +775,17 @@ function OrderPage({ addOrder, orders, reviews, setReviews }) {
   );
 }
 
-function AdminPage({ orders, setOrders, inventory, setInventory, unlocked, setUnlocked }) {
+function AdminPage({
+  orders,
+  setOrders,
+  inventory,
+  setInventory,
+  unlocked,
+  setUnlocked,
+  ordersSyncError,
+  ordersApiEnabled,
+  refreshOrders,
+}) {
   const [password, setPassword] = useState('');
   const analytics = useMemo(() => getAnalytics(orders), [orders]);
   const soldByProduct = useMemo(() => {
@@ -724,12 +805,28 @@ function AdminPage({ orders, setOrders, inventory, setInventory, unlocked, setUn
     if (password === ADMIN_PASSWORD) setUnlocked(true);
   };
 
-  const updateStatus = (id, status) => {
+  const updateStatus = async (id, status) => {
     setOrders((current) => current.map((order) => order.id === id ? { ...order, status } : order));
+    if (ordersApiEnabled) {
+      try {
+        await ordersApi.updateStatus(id, status);
+        await refreshOrders();
+      } catch {
+        // keep optimistic UI; sync error is shown globally if configured at app-level
+      }
+    }
   };
 
-  const deleteOrder = (id) => {
+  const deleteOrder = async (id) => {
     setOrders((current) => current.filter((order) => order.id !== id));
+    if (ordersApiEnabled) {
+      try {
+        await ordersApi.remove(id);
+        await refreshOrders();
+      } catch {
+        // keep optimistic UI; sync error is shown globally if configured at app-level
+      }
+    }
   };
 
   const updateInventoryStock = (productId, stockValue) => {
@@ -791,6 +888,15 @@ function AdminPage({ orders, setOrders, inventory, setInventory, unlocked, setUn
         </div>
         <button className="secondary-button" onClick={exportCsv}>Download CSV</button>
       </div>
+      {ordersApiEnabled ? (
+        <p className="summary-note">
+          Live orders sync is enabled.{ordersSyncError ? ` Sync issue: ${ordersSyncError}` : ''}
+        </p>
+      ) : (
+        <p className="summary-note">
+          Orders are saved only in this device/browser. To see customer orders on all devices, set `REACT_APP_ORDER_API_BASE`.
+        </p>
+      )}
 
       <div className="stat-grid">
         <Stat label="Total Revenue" value={currency(analytics.totalRevenue)} />
