@@ -214,7 +214,7 @@ function App() {
 
       <a
         className="floating-contact"
-        href="https://www.facebook.com/Christine%20Joy%20Nadong%20Manzan"
+        href="https://www.facebook.com/share/1NHZttCDKS/"
         target="_blank"
         rel="noreferrer"
       >
