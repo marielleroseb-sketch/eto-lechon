@@ -5,7 +5,8 @@ const STORAGE_KEY = 'eto-lechon-orders';
 const REVIEWS_STORAGE_KEY = 'eto-lechon-reviews';
 const INVENTORY_STORAGE_KEY = 'eto-lechon-inventory';
 const ADMIN_PASSWORD = 'Manzan123';
-const ORDER_API_BASE = (process.env.REACT_APP_ORDER_API_BASE || '').replace(/\/+$/, '');
+const ORDER_API_BASE_RAW = (process.env.REACT_APP_ORDER_API_BASE || '').trim();
+const ORDER_API_BASE = (ORDER_API_BASE_RAW || (process.env.NODE_ENV === 'production' ? '/api' : '')).replace(/\/+$/, '');
 
 async function ordersApiFetch(path, options) {
   const response = await fetch(`${ORDER_API_BASE}${path}`, {
